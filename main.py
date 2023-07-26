@@ -15,6 +15,11 @@
 
 """Training and evaluation"""
 
+import torch
+
+import tensorflow as tf
+tf.config.set_visible_devices([], 'GPU')
+
 import run_lib
 from absl import app
 from absl import flags
