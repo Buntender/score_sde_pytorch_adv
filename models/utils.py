@@ -105,6 +105,26 @@ def get_model_fn(model, train=False):
     A model function.
   """
 
+  # def model_fn(x, labels):
+  #   """Compute the output of the score-based model.
+  #
+  #   Args:
+  #     x: A mini-batch of input data.
+  #     labels: A mini-batch of conditioning variables for time steps. Should be interpreted differently
+  #       for different models.
+  #
+  #   Returns:
+  #     A tuple of (model output, new mutable states)
+  #   """
+  #   if not train:
+  #     model.eval()
+  #     return model(x, labels)
+  #   else:
+  #     model.train()
+  #     return model(x, labels)
+  #
+  # return model_fn
+
   def model_fn(x, labels):
     """Compute the output of the score-based model.
 
@@ -118,7 +138,7 @@ def get_model_fn(model, train=False):
     """
     if not train:
       model.eval()
-      return model(x, labels)
+      return torch.utils.checkpoint.checkpoint(model, x, labels)
     else:
       model.train()
       return model(x, labels)

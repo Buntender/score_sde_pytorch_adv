@@ -273,8 +273,12 @@ class LangevinCorrector(Corrector):
     for i in range(n_steps):
       grad = score_fn(x, t)
       noise = torch.randn_like(x)
-      grad_norm = torch.norm(grad.reshape(grad.shape[0], -1), dim=-1).mean()
-      noise_norm = torch.norm(noise.reshape(noise.shape[0], -1), dim=-1).mean()
+      # grad_norm = torch.norm(grad.reshape(grad.shape[0], -1), dim=-1).mean()
+      # noise_norm = torch.norm(noise.reshape(noise.shape[0], -1), dim=-1).mean()
+
+      grad_norm = torch.norm(grad.reshape(grad.shape[0], -1), dim=-1)
+      noise_norm = torch.norm(noise.reshape(noise.shape[0], -1), dim=-1)
+
       step_size = (target_snr * noise_norm / grad_norm) ** 2 * 2 * alpha
       x_mean = x + step_size[:, None, None, None] * grad
       x = x_mean + torch.sqrt(step_size * 2)[:, None, None, None] * noise
@@ -409,6 +413,92 @@ def get_pc_sampler(sde, shape, predictor, corrector, inverse_scaler, snr,
       return inverse_scaler(x_mean if denoise else x), sde.N * (n_steps + 1)
 
   return pc_sampler
+
+def get_partial_pc_sampler(sde, shape, predictor, corrector, inverse_scaler, snr,
+                   tstart = 1, n_steps=1, probability_flow=False, continuous=False,
+                   denoise=True, eps=1e-3, device='cuda'):
+  """Create a Predictor-Corrector (PC) sampler.
+
+  Args:
+    sde: An `sde_lib.SDE` object representing the forward SDE.
+    shape: A sequence of integers. The expected shape of a single sample.
+    predictor: A subclass of `sampling.Predictor` representing the predictor algorithm.
+    corrector: A subclass of `sampling.Corrector` representing the corrector algorithm.
+    inverse_scaler: The inverse data normalizer.
+    snr: A `float` number. The signal-to-noise ratio for configuring correctors.
+    n_steps: An integer. The number of corrector steps per predictor update.
+    probability_flow: If `True`, solve the reverse-time probability flow ODE when running the predictor.
+    continuous: `True` indicates that the score model was continuously trained.
+    denoise: If `True`, add one-step denoising to the final samples.
+    eps: A `float` number. The reverse-time SDE and ODE are integrated to `epsilon` to avoid numerical issues.
+    device: PyTorch device.
+
+  Returns:
+    A sampling function that returns samples and the number of function evaluations during sampling.
+  """
+  # Create predictor & corrector update functions
+  predictor_update_fn = functools.partial(shared_predictor_update_fn,
+                                          sde=sde,
+                                          predictor=predictor,
+                                          probability_flow=probability_flow,
+                                          continuous=continuous)
+  corrector_update_fn = functools.partial(shared_corrector_update_fn,
+                                          sde=sde,
+                                          corrector=corrector,
+                                          continuous=continuous,
+                                          snr=snr,
+                                          n_steps=n_steps)
+
+
+  def partial_pc_sampler(model, img):
+    """ The PC sampler funciton.
+
+    Args:
+      model: A score model.
+    Returns:
+      Samples, number of function evaluations.
+    """
+    # Initial sample
+
+    noise = sde.prior_sampling(shape).to(device)
+    # global sampler_NOISE
+
+
+    # if sampler_NOISE == None:
+    #   if device.index == 0:
+    #     # sampler_NOISE = sde.prior_sampling(shape).to(device)
+    #     sampler_NOISE = sde.prior_sampling(shape[1:]).to(device)
+    #     sampler_NOISE = sampler_NOISE.repeat(shape[0], 1, 1, 1)
+    #   else:
+    #     sampler_NOISE = torch.zeros_like(img)
+    #
+    #   torch.distributed.barrier()
+    #   torch.distributed.all_reduce(sampler_NOISE, op=torch.distributed.ReduceOp.SUM)
+
+
+    # if sampler_NOISE == None:
+    #     sampler_NOISE = sde.prior_sampling(shape[1:]).to(device)
+    #     # sampler_NOISE = sampler_NOISE.repeat(shape[0], 1, 1, 1)
+
+
+    # noise = sampler_NOISE.clone().detach()
+    # noise = noise.repeat(img.shape[0], 1, 1, 1)
+
+    mean, std = sde.marginal_prob(img, torch.tensor([tstart]).to(device))
+    x = mean + std[:, None, None, None] * noise
+
+    timesteps = torch.linspace(sde.T, eps, sde.N, device=device)
+
+    for i in range(int(sde.N * (1 - tstart)), sde.N):
+      t = timesteps[i]
+      vec_t = torch.ones(shape[0], device=t.device) * t
+      x, x_mean = corrector_update_fn(x, vec_t, model=model)
+      x, x_mean = predictor_update_fn(x, vec_t, model=model)
+
+    return inverse_scaler(x_mean if denoise else x), sde.N * (n_steps + 1)
+
+  return partial_pc_sampler
+
 
 
 def get_ode_sampler(sde, shape, inverse_scaler,
